@@ -319,7 +319,7 @@ paths:
       security:
         - bearerAuth: []
         - {}
-  /v1/posts/{post_id}/reaction:
+  /v1/posts/{post_id}/reactions/me:
     parameters:
       - name: post_id
         in: path
@@ -333,7 +333,12 @@ paths:
       tags:
         - reactions
       summary: Проставляет оценку.
-      description: Проставляет оценку.
+      description: >-
+        Ставит или заменяет оценку текущего пользователя посту; пользователь
+        берётся из токена, повторный запрос идемпотентен. Списка оценок API
+        не отдаёт — карточка поста и лента возвращают агрегат (схема
+        Reactions): количество оценок, среднее и собственную оценку
+        авторизованного пользователя. Среднее пересчитывается асинхронно.
       operationId: setReaction
       requestBody:
         description: >-
@@ -365,7 +370,7 @@ paths:
           $ref: '#/components/responses/UnexpectedError'
       security:
         - bearerAuth: []
-  /v1/users/{user_id}/subscription:
+  /v1/users/{user_id}/subscribers/me:
     parameters:
       - name: user_id
         in: path
@@ -459,6 +464,7 @@ components:
           minimum: -180
           maximum: 180
     Reactions:
+      description: Агрегат оценок поста. Отдельные оценки не отдаются.
       type: object
       required: [amount, value]
       properties:
