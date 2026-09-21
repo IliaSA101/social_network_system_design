@@ -1,0 +1,678 @@
+openapi: 3.2.0
+info:
+  title: Соцсеть путешественников
+  description: |-
+    Учебный репозиторий по курсу [System Design](https://balun.courses/courses/system_design) (Balun-courses).
+
+    Социальная сеть для путешественников: публикация постов о поездках
+    с фотографиями и привязкой к месту, реакции и комментарии, подписки,
+    лента и поиск популярных мест.
+
+    Требования и расчёт нагрузки — в README репозитория.
+
+    ## Сквозные соглашения
+
+    **Пагинация.** Все списки — курсорные. `cursor` непрозрачен для клиента:
+    возвращается в `next_cursor` и передаётся обратно без разбора. Пустой
+    `cursor` — первая страница, `next_cursor: null` — данные кончились.
+    Размер страницы задаёт сервер.
+
+    **Изображения.** Загрузка двухфазная: `POST /v1/images` возвращает
+    идентификатор временного файла, идентификаторы передаются в `POST /v1/posts`.
+    При создании поста файлы переезжают в постоянное хранилище и получают URL,
+    невостребованные удаляются. API отдаёт ссылки, байты отдаёт хранилище —
+    методов чтения изображений в спецификации нет.
+
+    В ленте отдаётся обложка (сжатое фото), в карточке поста — все фотографии
+    в полном размере.
+
+    **Места.** Место идентифицируется geohash-префиксом, вычисляемым
+    из координат: 4 символа — 1-й уровень каталога, 6 символов — 2-й.
+    Справочника мест нет, иерархия задаётся длиной префикса.
+
+    **Авторизация.** `Authorization: Bearer <token>`. Часть методов доступна
+    и без токена; авторизованному дополнительно отдаются его оценка поста
+    и признак подписки на автора. Выпуск и обновление токена — вне скоупа.
+
+    **Оценки.** Среднее по посту пересчитывается асинхронно, поэтому
+    после проставления оценки агрегат обновится не сразу. Своя оценка
+    возвращается сразу.
+  version: 1.0.0
+paths:
+  /v1/posts:
+    post:
+      tags:
+        - posts
+      summary: Добавляет новый пост.
+      description: Добавляет новый пост.
+      operationId: addPost
+      requestBody:
+        description: >-
+          Данные нового поста. photo_ids — идентификаторы предварительно
+          загруженных изображений, при создании они переносятся
+          в постоянное хранилище.
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - text
+                - coordinates
+                - photo_ids
+              properties:
+                text:
+                  type: string
+                  maxLength: 4000
+                  examples: [Путешествие по Боливии]
+                coordinates:
+                  $ref: '#/components/schemas/Coordinates'
+                photo_ids:
+                  type: array
+                  maxItems: 20
+                  items:
+                    type: string
+                    format: uuid
+                  examples:
+                    - ["0198f3c2-7a10-7e4b-9c31-5d80af26b7e9", "0198f3c2-7a11-7d02-8b6f-14c73e95a028", "0198f3c2-7a13-7f88-a04d-9e2b4c951d7f"]
+      responses:
+        '201':
+          description: Пост создан 
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Post'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+      security:
+        - bearerAuth: []
+    get:
+      tags:
+        - posts
+      summary: Получить ленту постов.
+      description: >-
+        Без параметров — лента по подпискам текущего пользователя, требует
+        авторизации. С author_id — лента автора, с place_geohash — лента места,
+        обе доступны без авторизации.
+      operationId: getPosts
+      parameters:
+        - $ref: '#/components/parameters/CursorParam'
+        - name: author_id
+          in: query
+          required: false
+          description: Лента конкретного автора.
+          schema:
+            type: string
+            format: uuid
+        - name: place_geohash
+          in: query
+          required: false
+          description: >-
+            Лента постов места. Принимается ячейка любого уровня каталога.
+          schema:
+            type: string
+            pattern: '^[0-9bcdefghjkmnpqrstuvwxyz]{4,6}$'
+            examples: [ucfv0j]
+      responses:
+        '200':
+          description: Страница ленты постов
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+      security:
+        - bearerAuth: []
+        - {}
+  /v1/posts/{post_id}:
+    get:
+      tags:
+        - posts
+      summary: Получить пост по идентификатору.
+      description: Возвращает пост по идентификатору.
+      operationId: getPostById
+      parameters:
+        - name: post_id
+          in: path
+          description: ID поста для получения
+          required: true
+          schema:
+            type: string
+            format: uuid
+            examples: [0198f3c2-7a09-7f88-a04d-9e2b4c951d7f]
+      responses:
+        '200':
+          description: Успешная операция
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Post'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+      security:
+        - bearerAuth: []
+        - {}
+  /v1/places:
+    get:
+      tags:
+        - search
+      summary: Получить каталог мест.
+      description: Возвращает каталог мест с учетом иерархии.
+      operationId: getPlaces
+      parameters:
+        - $ref: '#/components/parameters/CursorParam'
+        - name: place_geohash
+          in: query
+          required: false
+          description: >-
+            Ячейка верхнего уровня, вложенные места которой показать.
+            Пустое значение — верхний уровень каталога.
+          schema:
+            type: string
+            pattern: '^[0-9bcdefghjkmnpqrstuvwxyz]{4}$'
+            examples: [ucfv]
+      responses:
+        '200':
+          description: Успешная операция
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlacePage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+      security:
+        - bearerAuth: []
+        - {}
+  /v1/images:
+    post:
+      tags:
+        - images
+      summary: Загружает изображение на сервер.
+      description: Загружает изображение на сервер, изображение не больше 500 КБ.
+      operationId: addImage
+      requestBody:
+        description: Изображение для загрузки
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - image
+              properties:
+                image:
+                  type: string
+                  format: binary
+                  maxLength: 512000
+            encoding:
+              image:
+                contentType: image/jpeg, image/png, image/webp
+      responses:
+        '201':
+          description: Изображение загружено
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [photo_id]
+                properties:
+                  photo_id:
+                    type: string
+                    format: uuid
+                    examples: ["0198f3c2-7a10-7e4b-9c31-5d80af26b7e9"]
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+      security:
+        - bearerAuth: []
+  /v1/posts/{post_id}/comments:
+    parameters:
+      - name: post_id
+        in: path
+        description: ID поста
+        required: true
+        schema:
+          type: string
+          format: uuid
+          examples: [0198f3c2-7a09-7f88-a04d-9e2b4c951d7f]
+    post:
+      tags:
+        - comments
+      summary: Добавляет новый комментарий.
+      description: Добавляет новый комментарий.
+      operationId: addComment
+      requestBody:
+        description: >-
+          Данные нового комментария.
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - text
+              properties:
+                text:
+                  type: string
+                  maxLength: 500
+                  examples: [Классно написано, захотелось поехать туда.]
+      responses:
+        '201':
+          description: Комментарий создан 
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+      security:
+        - bearerAuth: []
+    get:
+      tags:
+        - comments
+      summary: Получить список комментариев для поста.
+      description: Возвращает список комментариев для поста в прямом порядке.
+      operationId: getComments
+      parameters:
+        - $ref: '#/components/parameters/CursorParam'
+      responses:
+        '200':
+          description: Успешная операция
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommentPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+      security:
+        - bearerAuth: []
+        - {}
+  /v1/posts/{post_id}/reaction:
+    parameters:
+      - name: post_id
+        in: path
+        description: ID поста
+        required: true
+        schema:
+          type: string
+          format: uuid
+          examples: [0198f3c2-7a09-7f88-a04d-9e2b4c951d7f]
+    put:
+      tags:
+        - reactions
+      summary: Проставляет оценку.
+      description: Проставляет оценку.
+      operationId: setReaction
+      requestBody:
+        description: >-
+          Проставление оценки
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - value
+              properties:
+                value:
+                  type: integer
+                  format: int32
+                  minimum: 1
+                  maximum: 5
+                  examples: [4]
+      responses:
+        '204':
+          description: Оценка проставлена
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+      security:
+        - bearerAuth: []
+  /v1/users/{user_id}/subscription:
+    parameters:
+      - name: user_id
+        in: path
+        description: ID пользователя
+        required: true
+        schema:
+          type: string
+          format: uuid
+          examples: [0198f3c2-7a09-7f88-a04d-9e2b4c951d7a]
+    put:
+      tags:
+        - subscriptions
+      summary: Проставляет подписку.
+      description: Проставляет подписку.
+      operationId: setSubscription
+      responses:
+        '204':
+          description: Подписка проставлена
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+      security:
+        - bearerAuth: []
+components:
+  parameters:
+    CursorParam:
+      name: cursor
+      in: query
+      required: false
+      description: Курсор последней прочитанной позиции. Пустой — первая страница.
+      schema:
+        type: string
+  responses:
+    BadRequest:
+      description: Некорректный запрос
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Требуется авторизация
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Ресурс не найден
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    UnexpectedError:
+      description: Непредвиденная ошибка
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Place:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          description: >-
+            Идентификатор места — geohash-префикс. Длина задаёт уровень
+            каталога: 4 символа — верхний, 6 — вложенный.
+          type: string
+          pattern: '^[0-9bcdefghjkmnpqrstuvwxyz]{4,6}$'
+          examples: [ucfv0j]
+        name:
+          description: Название из обратного геокодирования центра ячейки
+          type: string
+          examples: [город Санта-Крус-де-ла-Сьерра]
+    Coordinates:
+      type: object
+      required: [latitude, longitude]
+      properties:
+        latitude:
+          type: number
+          format: double
+          minimum: -90
+          maximum: 90
+        longitude:
+          type: number
+          format: double
+          minimum: -180
+          maximum: 180
+    Reactions:
+      type: object
+      required: [amount, value]
+      properties:
+        amount:
+          description: Количество оценок
+          type: integer
+          format: int64
+          minimum: 0
+          examples: [2]
+        value:
+          description: Среднее значение
+          type: number
+          format: double
+          minimum: 0
+          maximum: 5
+          examples: [4.5]
+        my_value:
+          type: [integer, "null"]
+          minimum: 1
+          maximum: 5
+          description: Оценка текущего пользователя. Отсутствует для неавторизованного запроса.
+          examples: [5]
+    PlaceRating:
+      type: object
+      required: [amount, value]
+      properties:
+        amount:
+          description: Количество оценок
+          type: integer
+          format: int64
+          minimum: 0
+          examples: [2]
+        value:
+          description: Среднее значение
+          type: number
+          format: double
+          minimum: 0
+          maximum: 5
+          examples: [4.5]
+    Author:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          description: ID автора
+          type: string
+          format: uuid
+          examples: [0198f3c2-7a05-7f88-a04d-9e2b4c951d7f]
+        name:
+          description: Имя автора
+          type: string
+          examples: [Иван Петров]
+        is_subscribed:
+          description: Пользователь подписан на автора
+          type: [boolean, "null"]
+          examples: [true]
+    CommentAuthor:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          description: ID автора
+          type: string
+          format: uuid
+          examples: [0198f3c2-7a05-7f88-a04d-9e2b4c951d7f]
+        name:
+          description: Имя автора
+          type: string
+          examples: [Иван Петров]
+    CommentPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Comment'
+        next_cursor:
+          type: [string, "null"]
+          description: Курсор для следующей страницы. null — комментариев больше нет.
+    Comment:
+      type: object
+      required: [id, created_at, author, text]
+      properties:
+        id:
+          type: string
+          format: uuid
+          examples: [0198f3c2-7a09-7f88-a04d-9e2b4c951d7f]
+        created_at:
+          type: string
+          format: date-time
+          examples: [2026-09-14T10:23:45Z]
+        author:
+          $ref: '#/components/schemas/CommentAuthor'
+        text:
+          type: string
+          examples: [Классно написано, захотелось поехать туда.]
+    Post:
+      type: object
+      required: [id, created_at, author, text, coordinates, photo_urls, reactions, place]
+      properties:
+        id:
+          type: string
+          format: uuid
+          examples: [0198f3c2-7a09-7f88-a04d-9e2b4c951d7f]
+        created_at:
+          type: string
+          format: date-time
+          examples: [2026-09-14T10:23:45Z]
+        author:
+          $ref: '#/components/schemas/Author'
+        text:
+          type: string
+          examples: [Путешествие по Боливии]
+        coordinates:
+          allOf:
+            - $ref: '#/components/schemas/Coordinates'
+          examples:
+            - latitude: -17.784717
+              longitude: -63.189869
+        place:
+          $ref: '#/components/schemas/Place'
+        photo_urls:
+          type: array
+          items:
+            type: string
+            format: uri
+          examples:
+            - ["https://cdn.example.com/p/9f2a.jpg", "https://cdn.example.com/p/7c41.jpg"]
+        reactions:
+          $ref: '#/components/schemas/Reactions'
+    PostPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PostPreview'
+        next_cursor:
+          type: [string, "null"]
+          description: Курсор для следующей страницы. null — постов больше нет.
+    PostPreview:
+      type: object
+      required: [id, created_at, author, text, coordinates, photo_url, reactions, place]
+      properties:
+        id:
+          type: string
+          format: uuid
+          examples: [0198f3c2-7a09-7f88-a04d-9e2b4c951d7f]
+        created_at:
+          type: string
+          format: date-time
+          examples: [2026-09-14T10:23:45Z]
+        author:
+          $ref: '#/components/schemas/Author'
+        text:
+          type: string
+          maxLength: 100
+          examples: [Путешествие по Боливии]
+        coordinates:
+          allOf:
+            - $ref: '#/components/schemas/Coordinates'
+          examples:
+            - latitude: -17.784717
+              longitude: -63.189869
+        place:
+          $ref: '#/components/schemas/Place'
+        photo_url:
+          type: string
+          format: uri
+          examples: ["https://cdn.example.com/p/9f2a.jpg"]
+        reactions:
+          $ref: '#/components/schemas/Reactions'
+    PlacePage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlacePreview'
+        next_cursor:
+          type: [string, "null"]
+          description: Курсор для следующей страницы. null — мест больше нет.
+    PlacePreview:
+      type: object
+      required: [place, posts_count, photo_url, place_rating]
+      properties:
+        place:
+          $ref: '#/components/schemas/Place'
+        posts_count:
+          type: integer
+          format: int64
+          minimum: 0
+          examples: [128]
+        photo_url:
+          type: string
+          format: uri
+          examples: ["https://cdn.example.com/p/9f2a.jpg"]
+        place_rating:
+          $ref: '#/components/schemas/PlaceRating'
+    Error:
+      type: object
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
+      required:
+        - code
+        - message
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
