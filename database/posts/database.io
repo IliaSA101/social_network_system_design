@@ -20,7 +20,7 @@ Table posts {
 
 Table posts_photos {
   post_id uuid [not null, note: "Связь с posts"]
-  photo_id uuid [not null, note: "Межсервисная ссылка без FK. ID фото из photos_temp или photos (при переносе сохраняется). Существование и владелец проверяются синхронным запросом в фото-сервис при создании поста."]
+  photo_id uuid [not null, note: "Межсервисная ссылка без FK. ID фото из photo_uploads или photos (при переносе сохраняется). Существование и владелец проверяются синхронным запросом в фото-сервис при создании поста."]
   sort int [not null, note: "Порядок фото"]
   Note: 'Порядок привязанных к посту фото'
 
