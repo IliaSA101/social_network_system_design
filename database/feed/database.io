@@ -1,3 +1,7 @@
+// Replication: master-slave, асинхронная, RF 3 (1 ведущий + 2 ведомых); чтение — с ведомых
+// Sharding: нет, 1 шард — 1,4 ТБ, 1 NVMe на хост
+// Hosts: 3 — README → Распределённое хранение данных → Оценка хостов
+
 Table feed_items {
   user_id uuid [not null, note: 'Подписчик — владелец ленты']
   post_id uuid [not null, note: 'Межсервисная ссылка без FK, см. README → Межсервисные ссылки. UUIDv7, сгенерированный при создании поста: порядок ленты — по post_id']

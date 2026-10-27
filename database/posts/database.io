@@ -1,3 +1,7 @@
+// Replication: master-slave, асинхронная, RF 3 (1 ведущий + 2 ведомых); чтение — с ведомых
+// Sharding: нет, 1 шард — 438 ГБ, 1 NVMe на хост
+// Hosts: 3 — README → Распределённое хранение данных → Оценка хостов
+
 Table posts {
   id uuid [primary key]
   created_at timestamp [not null]
