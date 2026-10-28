@@ -1,0 +1,128 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+title Социальная сеть для путешественников — контейнеры
+
+Person(traveler, "Путешественник", "Мобильные устройства и браузер")
+
+System_Ext(auth, "Система аутентификации", "Генерирует токены")
+System_Ext(cdn, "CDN", "Ускоряет загрузку фото у пользователей, уменьшает нагрузку на основную систему")
+System_Ext(geocoder, "Сервис обратного геокодирования", "По координатам возвращает название места")
+
+System_Boundary(travel_network, "Социальная сеть для путешественников") {
+
+    ' у пользователя
+    Container(mobile_app, "Мобильное приложение", "iOS / Android", "Выводит данные о постах, ленты, публикует новые посты")
+    Container(web_app, "Веб-приложение", "SPA (React)", "Выводит данные о постах, ленты, публикует новые посты")
+
+    ' вход в систему
+    Container(balancer, "Балансировщик нагрузки", "nginx", "Распределяет входящую нагрузку по экземплярам Gateway")
+    Container(gateway, "API Gateway", "Kong", "REST API взаимодействие с системой, проверка токена, маршрутизация запросов в сервисы")
+
+    ' сервисы и их хранилища
+    Container(posts, "Посты", "Go", "Публикация и карточка поста, ленты автора и места, выдача постов для ленты подписок")
+    ContainerDb(posts_db, "Посты (База данных)", "PostgreSQL", "Таблицы posts, posts_photos, posts_outbox")
+    Container(posts_worker, "Посты (Обработчик)", "Go", "Обновление рейтинга по событиям")
+
+    Container(places, "Места", "Go", "Просмотр каталога мест и карты, выдача названий мест")
+    ContainerDb(places_db, "Места (База данных)", "PostgreSQL", "Таблицы places, places_posts")
+    Container(places_worker, "Места (Обработчик)", "Go", "Приём постов, обновление оценок, суточный пересчёт, выбор обложки, получение названия через геокодер")
+
+    Container(photos, "Фото", "Go", "Прием загрузки фотографий, выдача ссылок на фото")
+    ContainerDb(photos_db, "Фото (База данных)", "PostgreSQL", "Таблицы photos, photo_uploads")
+    ContainerDb(photos_files, "Фото (Файлы)", "Ceph", "Файлы фото: горячий NVMe, холодный HDD, перенос по возрасту")
+    Container(photos_worker, "Фото (Обработчик)", "Go", "Перенос из временного в постоянное по событию, сжатие превью, чистка не опубликованных фото")
+
+    Container(comments, "Комментарии", "Go", "Публикация и получение комментариев к постам")
+    ContainerDb(comments_db, "Комментарии (База данных)", "PostgreSQL", "Таблица comments")
+
+    Container(reactions, "Реакции", "Go", "Обработка оценок пользователей")
+    ContainerDb(reactions_db, "Реакции (База данных)", "PostgreSQL", "Таблицы reactions, reactions_outbox")
+    Container(reactions_worker, "Реакции (Обработчик)", "Go", "Суточный снимок суммы и количества оценок по изменённым постам")
+
+    Container(subscriptions, "Подписки", "Go", "Обработка подписок пользователей")
+    ContainerDb(subscriptions_db, "Подписки (База данных)", "PostgreSQL", "Таблица subscribers")
+
+    Container(feed, "Ленты", "Go", "Выдача ленты подписок")
+    ContainerDb(feed_db, "Ленты (База данных)", "PostgreSQL", "Таблица feed_items")
+    Container(feed_worker, "Ленты (Обработчик)", "Go", "Раскладка ленты подписок при публикации")
+
+    Container(users, "Пользователи", "Go", "Выдача имен пользователей, проверка существования пользователя")
+    ContainerDb(users_db, "Пользователи (База данных)", "PostgreSQL", "Таблица users")
+
+    ' передача событий
+    Container(cdc, "CDC", "Debezium (Kafka Connect)", "Вычитывание журнала БД для получения событий из outbox сервисов и публикация в Kafka")
+    ContainerQueue(kafka, "Очередь сообщений", "Kafka", "Передача сообщений между сервисами о создании поста POST_CREATED, простановки оценки REACTION_SET, суточной сверки суммы и количества оценок POST_REACTIONS_SNAPSHOT")
+}
+
+' внешние, без изменений
+Rel(traveler, auth, "Получает токен")
+Rel(traveler, cdn, "Получает фото постов")
+
+Rel(traveler, mobile_app, "Использует")
+Rel(traveler, web_app, "Использует")
+
+Rel(mobile_app, balancer, "Отправляет запросы", "REST")
+Rel(web_app, balancer, "Отправляет запросы", "REST")
+
+Rel(balancer, gateway, "Распределяет запросы", "REST")
+
+Rel(gateway, posts, "Создание поста, карточка, ленты автора и места (GET /v1/posts с author_id или place_geohash)", "REST")
+Rel(posts, posts_db, "Транзакция создания поста и события, запросы получения постов, ленты автора и места", "SQL")
+Rel(posts_worker, posts_db, "Запросы обновления рейтинга по событиям", "SQL")
+Rel(posts_worker, kafka, "Подписывается на события: оценка (REACTION_SET), суточная сверка оценок (POST_REACTIONS_SNAPSHOT)", "Kafka")
+Rel(posts, photos, "Получение путей картинок и обложки, сверка автора картинки и поста", "REST")
+Rel(posts, users, "Получение имен авторов", "REST")
+Rel(posts, places, "Получение названия места", "REST")
+Rel(posts, subscriptions, "Получение признака подписки на автора", "REST")
+Rel(posts, reactions, "Получение своей оценки пользователя", "REST")
+
+Rel(gateway, places, "Получение каталога мест и карты", "REST")
+Rel(places, places_db, "Чтение каталога мест и карты, названий мест", "SQL")
+Rel(places_worker, places_db, "Запросы добавления привязок к постам, запросы обновления оценок, обложки, суточного пересчёта счётчиков и рейтингов ячеек, названия от геокодера", "SQL")
+Rel(places_worker, geocoder, "Получение названия через геокодер", "REST")
+Rel(places_worker, kafka, "Подписывается на события: создание поста (POST_CREATED), оценка (REACTION_SET), суточная сверка оценок (POST_REACTIONS_SNAPSHOT)", "Kafka")
+Rel(places, photos, "Получение пути картинки обложки", "REST")
+
+Rel(cdc, posts_db, "Вычитывание новых событий из posts_outbox", "WAL")
+Rel(cdc, reactions_db, "Вычитывание новых событий из reactions_outbox", "WAL")
+Rel(cdc, kafka, "Отправка событий из outbox сервисов", "Kafka")
+
+Rel(gateway, photos, "Загрузка фотографий", "REST")
+Rel(photos, photos_db, "Запись метаданных о фотографиях, чтение путей до фото, проверка владельца фото при создании поста", "SQL")
+Rel(photos, photos_files, "Загрузка файлов фото", "S3")
+Rel(photos_worker, photos_db, "Записи обновлений таблиц метаданных о фото (перенос), удаление записей не опубликованных фото", "SQL")
+Rel(photos_worker, photos_files, "Перевод временных в постоянные файлы, добавление превью фото, удаление не опубликованных", "S3")
+Rel(photos_worker, kafka, "Подписывается на события: создание поста (POST_CREATED)", "Kafka")
+
+Rel(cdn, photos_files, "Получает фото постов при CDN miss", "S3")
+
+Rel(gateway, comments, "Создание комментария, получение комментариев поста", "REST")
+Rel(comments, comments_db, "Запросы создания комментария, получения комментариев поста", "SQL")
+Rel(comments, posts, "Проверка существования поста", "REST")
+Rel(comments, users, "Получение имен авторов комментариев", "REST")
+
+Rel(gateway, reactions, "Проставление оценки поста", "REST")
+Rel(reactions, reactions_db, "Транзакция проставления оценки и события, запросы получения своей оценки пользователя", "SQL")
+Rel(reactions, posts, "Проверка существования поста", "REST")
+Rel(reactions_worker, reactions_db, "Запросы получения оценок, измененных за сутки, записи событий суточной сверки в outbox", "SQL")
+
+Rel(gateway, subscriptions, "Подписка на пользователя", "REST")
+Rel(subscriptions, subscriptions_db, "Запросы создания подписки, получения признака подписки, подписчиков автора", "SQL")
+Rel(subscriptions, users, "Проверка существования автора", "REST")
+
+Rel(gateway, feed, "Лента подписок (GET /v1/posts без параметров)", "REST")
+Rel(feed, feed_db, "Запросы получения ленты подписок", "SQL")
+Rel(feed, posts, "Получение постов ленты", "REST")
+Rel(feed, users, "Получение имен авторов", "REST")
+Rel(feed, places, "Получение названий мест", "REST")
+Rel(feed, photos, "Получение путей обложек", "REST")
+Rel(feed, reactions, "Получение своей оценки пользователя", "REST")
+Rel(feed_worker, kafka, "Подписывается на события: создание поста (POST_CREATED)", "Kafka")
+Rel(feed_worker, subscriptions, "Получение подписчиков автора поста", "REST")
+Rel(feed_worker, feed_db, "Запросы добавления поста в ленты подписчиков", "SQL")
+
+Rel(users, users_db, "Запросы получения имен пользователей, проверки существования", "SQL")
+
+SHOW_LEGEND()
+@enduml

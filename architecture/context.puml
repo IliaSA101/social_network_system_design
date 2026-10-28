@@ -1,0 +1,21 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
+
+title Социальная сеть для путешественников
+
+Person(traveler, "Путешественник", "Мобильные устройства и браузер")
+
+System(travel_network, "Социальная сеть для путешественников", "Хранит данные о постах, группирует по местоположениям, выводит посты и ленты с ними")
+
+System_Ext(auth, "Система аутентификации", "Генерирует токены")
+System_Ext(cdn, "CDN", "Ускоряет загрузку фото у пользователей, уменьшает нагрузку на основную систему")
+System_Ext(geocoder, "Сервис обратного геокодирования", "По координатам возвращает название места")
+
+Rel(traveler, travel_network, "Публикует посты с фото и местом, оценивает и комментирует, подписывается, читает ленты, ищет популярные места")
+Rel(traveler, auth, "Получает токен")
+Rel(travel_network, geocoder, "Получает название места по координатам")
+Rel(traveler, cdn, "Получает фото постов")
+Rel(cdn, travel_network, "Получает фото постов при CDN miss")
+
+SHOW_LEGEND()
+@enduml
